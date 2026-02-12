@@ -48,14 +48,29 @@ export default function ChatPage() {
     setUserId(storedUserId)
     loadRoomData()
     
-    // Realtime ulanish
-    const channel = supabase
-      .channel(`room-${roomId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${roomId}` },
-        (payload) => {
-          const newMsg = payload.new as Message
+    // useEffect ichidagi realtime qismini shunga almashtiring:
+
+const channel = supabase
+  .channel('public:messages') // Nomini o'zgartirdik
+  .on(
+    'postgres_changes',
+    { 
+      event: 'INSERT', 
+      schema: 'public', 
+      table: 'messages'
+      // filter: ... qismini olib tashladik, hammasini eshitib ko'ramiz
+    },
+    (payload) => {
+      console.log('Yangi signal keldi:', payload) // Konsolga chiqarib tekshiramiz
+      const newMsg = payload.new as Message
+      if (newMsg.room_id === roomId) { // Filtrni shu yerda qilamiz
+         setMessages((prev) => [...prev, newMsg])
+      }
+    }
+  )
+  .subscribe((status) => {
+    console.log('Ulanish statusi:', status) // SUBSCRIBED chiqishi kerak
+  })
           // Agar xabarni o'zimiz yuborgan bo'lsak, uni qayta qo'shmaymiz (dublikat bo'lmasligi uchun)
           if (newMsg.sender_id !== storedUserId) {
             setMessages((prev) => [...prev, newMsg])
