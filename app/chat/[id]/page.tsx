@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Heart, Copy, Check, Sparkles, User, ArrowLeft } from 'lucide-react'
+import { Send, Heart, Copy, Check, Sparkles, User, ArrowLeft, Users } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
@@ -25,11 +25,11 @@ export default function ChatPage() {
   const [userId, setUserId] = useState<string>('')
   const [copied, setCopied] = useState(false)
   const [otherUserTyping, setOtherUserTyping] = useState(false)
+  const [memberCount, setMemberCount] = useState(0)
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
-  // 1. Foydalanuvchi va Xona ma'lumotlarini yuklash
   useEffect(() => {
     const storedUserId = localStorage.getItem('userId')
     if (!storedUserId) {
@@ -39,11 +39,17 @@ export default function ChatPage() {
     setUserId(storedUserId)
 
     const initChat = async () => {
-      // Xona ma'lumotlari
+      // 1. Fetch Room Details & Member Count
       const { data: roomData } = await supabase.from('rooms').select('*').eq('id', roomId).single()
       setRoom(roomData)
 
-      // Eski xabarlar
+      const { count } = await supabase
+        .from('room_participants')
+        .select('*', { count: 'exact', head: true })
+        .eq('room_id', roomId)
+      setMemberCount(count || 0)
+
+      // 2. Fetch Messages
       const { data: oldMsgs } = await supabase
         .from('messages')
         .select('*')
@@ -51,7 +57,7 @@ export default function ChatPage() {
         .order('created_at', { ascending: true })
       if (oldMsgs) setMessages(oldMsgs)
 
-      // Realtime Ulanish (Eng muhim qismi)
+      // 3. Realtime Subscription
       const channel = supabase.channel(`room_events_${roomId}`, {
         config: { broadcast: { self: true }, presence: { key: storedUserId } }
       })
@@ -64,7 +70,6 @@ export default function ChatPage() {
           filter: `room_id=eq.${roomId}` 
         }, (payload) => {
           const incoming = payload.new as Message
-          // Xabar dublikat bo'lmasligi uchun tekshiramiz
           setMessages((current) => {
             if (current.find(m => m.id === incoming.id)) return current
             return [...current, incoming]
@@ -80,9 +85,7 @@ export default function ChatPage() {
             setOtherUserTyping(payload.new.is_typing)
           }
         })
-        .subscribe((status) => {
-          console.log("Realtime status:", status)
-        })
+        .subscribe()
 
       return () => {
         supabase.removeChannel(channel)
@@ -92,7 +95,6 @@ export default function ChatPage() {
     initChat()
   }, [roomId, router])
 
-  // Xabarlar kelsa pastga tushirish
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, otherUserTyping])
@@ -101,32 +103,33 @@ export default function ChatPage() {
     e.preventDefault()
     if (!newMessage.trim()) return
 
-    const tempMsg = {
-      id: Math.random().toString(), // Vaqtincha ID
-      room_id: roomId,
-      sender_id: userId,
-      content: newMessage.trim(),
-      created_at: new Date().toISOString()
-    }
-
-    setNewMessage('') // Inputni darhol tozalash
+    const content = newMessage.trim()
+    setNewMessage('') 
     
-    // Typingni to'xtatish
+    // Stop typing status
     await supabase.from('room_participants').update({ is_typing: false }).eq('room_id', roomId).eq('user_id', userId)
+
+    // Optimistic UI (Instant message for sender)
+    const tempMsg: Message = {
+        id: Math.random().toString(),
+        room_id: roomId,
+        sender_id: userId,
+        content: content,
+        created_at: new Date().toISOString()
+    }
+    setMessages(prev => [...prev, tempMsg])
 
     const { error } = await supabase.from('messages').insert([{
       room_id: roomId,
       sender_id: userId,
-      content: tempMsg.content
+      content: content
     }])
 
-    if (error) console.error("Xabar ketmadi:", error)
+    if (error) console.error("Message failed:", error)
   }
 
   const handleTyping = (val: string) => {
     setNewMessage(val)
-    
-    // "Yozyapti..." signalini yuborish
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
     
     supabase.from('room_participants').update({ is_typing: true }).eq('room_id', roomId).eq('user_id', userId)
@@ -143,33 +146,46 @@ export default function ChatPage() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  if (!room) return <div className="h-screen flex items-center justify-center dark:bg-gray-900 dark:text-white">Connecting to Aura...</div>
+  if (!room) return <div className="h-screen flex items-center justify-center dark:bg-gray-950 dark:text-white">Connecting to Aura...</div>
 
   return (
     <div className="flex flex-col h-screen bg-[#FDFCFE] dark:bg-gray-950">
-      {/* Header */}
-      <div className="p-4 border-b bg-white/50 dark:bg-gray-900/50 backdrop-blur-lg flex items-center justify-between sticky top-0 z-10">
+      {/* Dynamic Header */}
+      <div className="p-4 border-b bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl flex items-center justify-between sticky top-0 z-20">
         <div className="flex items-center gap-3">
-          <button onClick={() => router.push('/')} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full">
+          <button onClick={() => router.push('/')} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors">
             <ArrowLeft size={20} className="dark:text-white"/>
           </button>
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-pink-400 to-purple-500 flex items-center justify-center text-white font-bold shadow-md">
-            {room.type === 'private' ? 'P' : 'M'}
+          <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-pink-400 to-purple-600 flex items-center justify-center text-white shadow-lg">
+            {room.type === 'private' ? <User size={20}/> : <Users size={20}/>}
           </div>
           <div>
-            <h1 className="font-bold text-gray-800 dark:text-white">
-              {room.type === 'private' ? 'Private Aura' : 'Matched Souls'}
+            <h1 className="font-bold text-gray-800 dark:text-white leading-tight">
+              {room.name || (room.type === 'private' ? 'Private Aura' : 'Soul Group')}
             </h1>
-            <p className="text-[10px] text-green-500 font-medium animate-pulse">Online & Secure</p>
+            <p className="text-[10px] text-green-500 font-bold">
+              {room.type === 'group' ? `${memberCount} / 20 Members` : 'Live & Encrypted'}
+            </p>
           </div>
         </div>
         
-        {room.invite_code && (
-          <button onClick={copyInvite} className="flex items-center gap-2 bg-pink-50 text-pink-600 px-3 py-1.5 rounded-full text-xs font-semibold hover:bg-pink-100 transition-all border border-pink-100">
-            {copied ? <Check size={14}/> : <Copy size={14}/>}
-            {copied ? "Copied!" : "Invite Link"}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+           {/* Romantic Letter Button */}
+           <button 
+             onClick={() => router.push('/love/create')}
+             className="p-2 bg-rose-50 dark:bg-rose-900/20 text-rose-500 rounded-full hover:scale-110 transition-all"
+             title="Send Love Letter"
+           >
+             <Heart size={20} fill="currentColor" />
+           </button>
+
+           {room.invite_code && (
+            <button onClick={copyInvite} className="flex items-center gap-2 bg-gray-900 dark:bg-white text-white dark:text-black px-4 py-2 rounded-full text-xs font-bold hover:opacity-80 transition-all shadow-md">
+                {copied ? <Check size={14}/> : <Copy size={14}/>}
+                {copied ? "Link Copied!" : "Invite Link"}
+            </button>
+           )}
+        </div>
       </div>
 
       {/* Messages */}
@@ -183,12 +199,12 @@ export default function ChatPage() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}
             >
-              <div className={`max-w-[85%] p-3 rounded-2xl shadow-sm text-sm md:text-base leading-relaxed break-words whitespace-pre-wrap ${
-                isMe ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white rounded-tr-none' 
-                     : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-tl-none border border-gray-100 dark:border-gray-700'
+              <div className={`max-w-[80%] px-4 py-2.5 rounded-2xl shadow-sm text-sm leading-relaxed break-words ${
+                isMe ? 'bg-pink-500 text-white rounded-tr-none' 
+                     : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 rounded-tl-none border border-gray-100 dark:border-gray-700'
               }`}>
                 {msg.content}
-                <div className={`text-[9px] mt-1 opacity-60 ${isMe ? 'text-right' : 'text-left'}`}>
+                <div className={`text-[8px] mt-1 opacity-60 ${isMe ? 'text-right' : 'text-left'}`}>
                   {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </div>
               </div>
@@ -198,32 +214,36 @@ export default function ChatPage() {
         
         {otherUserTyping && (
           <div className="flex justify-start">
-            <div className="bg-gray-100 dark:bg-gray-800 px-4 py-2 rounded-full flex gap-1">
-              <span className="w-1.5 h-1.5 bg-pink-400 rounded-full animate-bounce" />
-              <span className="w-1.5 h-1.5 bg-pink-400 rounded-full animate-bounce [animation-delay:0.2s]" />
-              <span className="w-1.5 h-1.5 bg-pink-400 rounded-full animate-bounce [animation-delay:0.4s]" />
+            <div className="bg-gray-100 dark:bg-gray-800 px-4 py-2 rounded-2xl flex gap-1 items-center">
+              <span className="text-[10px] text-gray-500 font-bold mr-1 italic">Someone typing</span>
+              <span className="w-1 h-1 bg-pink-400 rounded-full animate-bounce" />
+              <span className="w-1 h-1 bg-pink-400 rounded-full animate-bounce [animation-delay:0.2s]" />
+              <span className="w-1 h-1 bg-pink-400 rounded-full animate-bounce [animation-delay:0.4s]" />
             </div>
           </div>
         )}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <div className="p-4 bg-white dark:bg-gray-950 border-t">
-        <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex items-center gap-2">
-          <input
-            type="text"
-            value={newMessage}
-            onChange={(e) => handleTyping(e.target.value)}
-            placeholder="Type your message..."
-            className="flex-1 bg-gray-100 dark:bg-gray-900 dark:text-white px-5 py-3.5 rounded-2xl focus:outline-none focus:ring-2 focus:ring-pink-400/50 transition-all"
-          />
+      {/* Input Section */}
+      <div className="p-4 bg-white/80 dark:bg-gray-950/80 backdrop-blur-md border-t">
+        <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex items-center gap-3">
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={newMessage}
+              onChange={(e) => handleTyping(e.target.value)}
+              placeholder="Message..."
+              className="w-full bg-gray-100 dark:bg-gray-900 dark:text-white px-6 py-3.5 rounded-3xl focus:outline-none focus:ring-2 focus:ring-pink-400/50 transition-all border-none"
+            />
+            <Sparkles className="absolute right-4 top-3.5 text-pink-300 pointer-events-none" size={18} />
+          </div>
           <button
             type="submit"
             disabled={!newMessage.trim()}
-            className="w-12 h-12 rounded-2xl bg-pink-500 text-white flex items-center justify-center hover:bg-pink-600 transition-all disabled:opacity-50 shadow-lg shadow-pink-200 dark:shadow-none"
+            className="w-12 h-12 rounded-full bg-pink-500 text-white flex items-center justify-center hover:bg-pink-600 transition-all disabled:opacity-50 shadow-lg active:scale-95"
           >
-            <Send size={20} />
+            <Send size={20} className="ml-1" />
           </button>
         </form>
       </div>
