@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Heart, Copy, Check, Sparkles, User, ArrowLeft, Users } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { Send, Heart, Copy, Check, Sparkles, User, ArrowLeft, Users, Share2 } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
@@ -39,7 +39,7 @@ export default function ChatPage() {
     setUserId(storedUserId)
 
     const initChat = async () => {
-      // 1. Fetch Room Details & Member Count
+      // 1. Room info & Member Count
       const { data: roomData } = await supabase.from('rooms').select('*').eq('id', roomId).single()
       setRoom(roomData)
 
@@ -49,7 +49,7 @@ export default function ChatPage() {
         .eq('room_id', roomId)
       setMemberCount(count || 0)
 
-      // 2. Fetch Messages
+      // 2. Load Messages
       const { data: oldMsgs } = await supabase
         .from('messages')
         .select('*')
@@ -57,7 +57,7 @@ export default function ChatPage() {
         .order('created_at', { ascending: true })
       if (oldMsgs) setMessages(oldMsgs)
 
-      // 3. Realtime Subscription
+      // 3. Realtime Subscription (Duplicate Fix)
       const channel = supabase.channel(`room_events_${roomId}`, {
         config: { broadcast: { self: true }, presence: { key: storedUserId } }
       })
@@ -70,10 +70,10 @@ export default function ChatPage() {
           filter: `room_id=eq.${roomId}` 
         }, (payload) => {
           const incoming = payload.new as Message
-          setMessages((current) => {
-            if (current.find(m => m.id === incoming.id)) return current
-            return [...current, incoming]
-          })
+          // AGAR xabarni o'zimiz yozgan bo'lsak, uni bu yerdan olmaymiz (Optimistic UI ishlatganimiz uchun)
+          if (incoming.sender_id === storedUserId) return
+
+          setMessages((current) => [...current, incoming])
         })
         .on('postgres_changes', {
           event: 'UPDATE',
@@ -95,6 +95,7 @@ export default function ChatPage() {
     initChat()
   }, [roomId, router])
 
+  // Scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, otherUserTyping])
@@ -106,10 +107,10 @@ export default function ChatPage() {
     const content = newMessage.trim()
     setNewMessage('') 
     
-    // Stop typing status
+    // Stop typing
     await supabase.from('room_participants').update({ is_typing: false }).eq('room_id', roomId).eq('user_id', userId)
 
-    // Optimistic UI (Instant message for sender)
+    // Optimistic UI (Darrov ko'rsatish)
     const tempMsg: Message = {
         id: Math.random().toString(),
         room_id: roomId,
@@ -119,6 +120,7 @@ export default function ChatPage() {
     }
     setMessages(prev => [...prev, tempMsg])
 
+    // Send to DB
     const { error } = await supabase.from('messages').insert([{
       room_id: roomId,
       sender_id: userId,
@@ -150,7 +152,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col h-screen bg-[#FDFCFE] dark:bg-gray-950">
-      {/* Dynamic Header */}
+      {/* Header */}
       <div className="p-4 border-b bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl flex items-center justify-between sticky top-0 z-20">
         <div className="flex items-center gap-3">
           <button onClick={() => router.push('/')} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors">
@@ -170,7 +172,7 @@ export default function ChatPage() {
         </div>
         
         <div className="flex items-center gap-2">
-           {/* Romantic Letter Button */}
+           {/* Love Letter Button */}
            <button 
              onClick={() => router.push('/love/create')}
              className="p-2 bg-rose-50 dark:bg-rose-900/20 text-rose-500 rounded-full hover:scale-110 transition-all"
@@ -179,10 +181,11 @@ export default function ChatPage() {
              <Heart size={20} fill="currentColor" />
            </button>
 
+           {/* Share Link Button */}
            {room.invite_code && (
             <button onClick={copyInvite} className="flex items-center gap-2 bg-gray-900 dark:bg-white text-white dark:text-black px-4 py-2 rounded-full text-xs font-bold hover:opacity-80 transition-all shadow-md">
-                {copied ? <Check size={14}/> : <Copy size={14}/>}
-                {copied ? "Link Copied!" : "Invite Link"}
+                {copied ? <Check size={14}/> : <Share2 size={14}/>}
+                {copied ? "Link Copied!" : "Share Link"}
             </button>
            )}
         </div>
@@ -225,7 +228,7 @@ export default function ChatPage() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Section */}
+      {/* Input */}
       <div className="p-4 bg-white/80 dark:bg-gray-950/80 backdrop-blur-md border-t">
         <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex items-center gap-3">
           <div className="flex-1 relative">

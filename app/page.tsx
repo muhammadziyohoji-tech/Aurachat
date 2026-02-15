@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Heart, Sparkles, Users, Link as LinkIcon, ArrowRight, Stars } from 'lucide-react'
+import { Heart, Sparkles, Users, Link as LinkIcon, ArrowRight } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import { createAnonymousUser, createPrivateRoom, findMatch } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase'
 
 const INTERESTS = [
   'Music', 'Travel', 'Poetry', 'Art', 'Books', 
@@ -12,7 +12,7 @@ const INTERESTS = [
   'Fitness', 'Fashion', 'Nature', 'Astronomy', 'Coffee'
 ]
 
-// Animated Background Component (Window xatosini oldini olish uchun alohida)
+// Animated Background Component
 const FloatingHearts = () => {
   const [mounted, setMounted] = useState(false)
   
@@ -57,6 +57,24 @@ export default function LandingPage() {
   const [username, setUsername] = useState('')
   const [loading, setLoading] = useState(false)
 
+  // 1. Userni tekshirish yoki yaratish funksiyasi
+  const getOrCreateUser = async () => {
+    let userId = localStorage.getItem('userId')
+    if (!userId) {
+      userId = crypto.randomUUID()
+      localStorage.setItem('userId', userId)
+    }
+    
+    // Profilni yangilash
+    await supabase.from('profiles').upsert({
+      id: userId,
+      username: username,
+      interests: selectedInterests
+    })
+
+    return userId
+  }
+
   const toggleInterest = (interest: string) => {
     setSelectedInterests(prev =>
       prev.includes(interest)
@@ -72,22 +90,25 @@ export default function LandingPage() {
     setLoading(true)
 
     try {
-      console.log('Creating user...')
-      const user = await createAnonymousUser(username)
-      
-      // Ma'lumotlarni saqlaymiz
-      localStorage.setItem('userId', user.id)
-      localStorage.setItem('username', username)
+      const userId = await getOrCreateUser()
 
-      console.log('Creating room...')
-      const room = await createPrivateRoom(user.id)
+      // Yangi xona yaratish
+      const { data: room, error } = await supabase
+        .from('rooms')
+        .insert([{ 
+            type: 'private', 
+            owner_id: userId,
+            name: 'Private Room' // Default nom
+        }])
+        .select()
+        .single()
       
-      console.log('Redirecting to:', room.id)
+      if (error) throw error
       router.push(`/chat/${room.id}`)
       
     } catch (error: any) {
-      console.error('Xatolik yuz berdi:', error)
-      alert(`Xatolik: ${error.message || 'Something went wrong'}`)
+      console.error('Xatolik:', error)
+      alert(`Error: ${error.message}`)
     } finally {
       setLoading(false)
     }
@@ -98,23 +119,39 @@ export default function LandingPage() {
     setLoading(true)
 
     try {
-      const user = await createAnonymousUser(username, selectedInterests)
-      localStorage.setItem('userId', user.id)
-      localStorage.setItem('username', username)
+      const userId = await getOrCreateUser()
 
-      const room = await findMatch(user.id, selectedInterests)
+      // Oddiy Match Logic: Ochiq va bo'sh xona qidirish
+      // Izoh: Murakkab match algoritmi uchun Edge Functions kerak bo'ladi,
+      // bu yerda oddiy "bo'sh xona top yoki yarat" mantiqi ishlatilmoqda.
       
-      if (room) {
-        router.push(`/chat/${room.id}`)
-      } else {
-        // Hozircha shunchaki waiting pagega yo'naltiramiz
-        // (Waiting page hali yo'q bo'lsa, chatga yo'naltirib turing)
-        alert("Hozircha bo'sh sherik topilmadi. Kutish rejimiga o'tilmoqda (Demo).")
-        // router.push('/waiting') 
+      // 1. Mavjud bo'sh xona qidiramiz
+      const { data: rooms } = await supabase
+        .from('rooms')
+        .select('id, room_participants(count)')
+        .eq('type', 'public') // 'group' emas, vaqtinchalik 'public' match uchun
+        .limit(10)
+
+      // 20 tadan kam odami bor xonani topish (Match uchun aslida 1 ta odamli xona kerak)
+      // Bu yerda demo uchun shunchaki yangi xona yaratamiz agar topilmasa
+      
+      const { data: newRoom, error } = await supabase
+        .from('rooms')
+        .insert([{ 
+            type: 'public', // Match uchun public type ishlatamiz
+            owner_id: userId,
+            name: `${username}'s Lounge`
+        }])
+        .select()
+        .single()
+
+      if (newRoom) {
+        router.push(`/chat/${newRoom.id}`)
       }
+
     } catch (error: any) {
       console.error('Match xatosi:', error)
-      alert('Xatolik yuz berdi. Iltimos qayta urinib ko\'ring.')
+      alert('Something went wrong. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -153,7 +190,7 @@ export default function LandingPage() {
               </motion.div>
 
               <p className="text-xl text-gray-700 dark:text-gray-300 mb-12 max-w-2xl mx-auto font-light">
-                Build beutiful communications.
+                Build beautiful communications.
               </p>
 
               {/* Username Input */}
@@ -163,7 +200,7 @@ export default function LandingPage() {
                   placeholder="Write your name..."
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full max-w-md mx-auto px-6 py-4 rounded-full bg-white/30 backdrop-blur-md border border-white/50 shadow-lg text-center text-lg focus:outline-none focus:ring-2 focus:ring-pink-400 text-gray-800 placeholder-gray-500"
+                  className="w-full max-w-md mx-auto px-6 py-4 rounded-full bg-white/30 backdrop-blur-md border border-white/50 shadow-lg text-center text-lg focus:outline-none focus:ring-2 focus:ring-pink-400 text-gray-800 dark:text-white placeholder-gray-500"
                 />
               </motion.div>
 
@@ -177,8 +214,8 @@ export default function LandingPage() {
                   className="bg-white/40 backdrop-blur-lg p-8 rounded-3xl shadow-xl border border-white/60 hover:border-pink-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
                 >
                   <LinkIcon className="w-12 h-12 mx-auto mb-4 text-pink-500 group-hover:scale-110 transition-transform" />
-                  <h3 className="text-2xl font-bold mb-2 text-gray-800">Private Room</h3>
-                  <p className="text-gray-600 text-sm">Talk with your friends by a private link</p>
+                  <h3 className="text-2xl font-bold mb-2 text-gray-800 dark:text-white">Private Room</h3>
+                  <p className="text-gray-600 dark:text-gray-200 text-sm">Talk with your friends by a private link</p>
                 </motion.button>
 
                 <motion.button
@@ -189,8 +226,8 @@ export default function LandingPage() {
                   className="bg-white/40 backdrop-blur-lg p-8 rounded-3xl shadow-xl border border-white/60 hover:border-violet-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
                 >
                   <Users className="w-12 h-12 mx-auto mb-4 text-violet-500 group-hover:scale-110 transition-transform" />
-                  <h3 className="text-2xl font-bold mb-2 text-gray-800">Find Soulmate</h3>
-                  <p className="text-gray-600 text-sm">Find people who have similar interests with you</p>
+                  <h3 className="text-2xl font-bold mb-2 text-gray-800 dark:text-white">Find Soulmate</h3>
+                  <p className="text-gray-600 dark:text-gray-200 text-sm">Find people who have similar interests with you</p>
                 </motion.button>
               </div>
             </motion.div>
@@ -205,8 +242,8 @@ export default function LandingPage() {
               className="bg-white/40 backdrop-blur-xl p-8 rounded-3xl shadow-2xl border border-white/50"
             >
               <button onClick={() => setMode('choose')} className="mb-4 text-pink-600 font-medium">← Back</button>
-              <h2 className="text-3xl font-bold text-center mb-2 text-gray-800">About you...</h2>
-              <p className="text-center text-gray-600 mb-6">Select from 3 to 5</p>
+              <h2 className="text-3xl font-bold text-center mb-2 text-gray-800 dark:text-white">About you...</h2>
+              <p className="text-center text-gray-600 dark:text-gray-200 mb-6">Select from 3 to 5</p>
               
               <div className="flex flex-wrap gap-3 justify-center mb-8">
                 {INTERESTS.map((interest) => (
@@ -230,7 +267,7 @@ export default function LandingPage() {
                   disabled={selectedInterests.length < 3 || loading}
                   className="bg-gradient-to-r from-pink-500 to-violet-600 text-white px-8 py-3 rounded-full font-bold text-lg shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 mx-auto"
                 >
-                  {loading ? 'Finding...' : 'Soulmate finding'} <ArrowRight size={20} />
+                  {loading ? 'Finding...' : 'Find Soulmate'} <ArrowRight size={20} />
                 </button>
               </div>
             </motion.div>
@@ -246,15 +283,15 @@ export default function LandingPage() {
             >
               <button onClick={() => setMode('choose')} className="mb-4 text-pink-600 font-medium">← Back</button>
               <LinkIcon className="w-16 h-16 mx-auto mb-4 text-pink-500" />
-              <h2 className="text-3xl font-bold mb-4 text-gray-800">Private room</h2>
-              <p className="text-gray-600 mb-8">We give you a private link. You can send it to your friends and talk with them.</p>
+              <h2 className="text-3xl font-bold mb-4 text-gray-800 dark:text-white">Private room</h2>
+              <p className="text-gray-600 dark:text-gray-200 mb-8">We give you a private link. You can send it to your friends and talk with them.</p>
               
               <button
                 onClick={handleCreatePrivateRoom}
                 disabled={loading}
                 className="bg-gradient-to-r from-pink-500 to-violet-600 text-white px-8 py-3 rounded-full font-bold text-lg shadow-lg hover:shadow-xl transition-all disabled:opacity-50 flex items-center gap-2 mx-auto"
               >
-                {loading ? 'creating...' : 'create a room'} <Heart size={20} />
+                {loading ? 'Creating...' : 'Create Room'} <Heart size={20} />
               </button>
             </motion.div>
           )}
